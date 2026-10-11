@@ -1,0 +1,17 @@
+# Secrets — never commit real keys. Copy .env.example to .env and fill it in.
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated audio (regenerated at runtime, not source)
+**/audio_cache/*
+!**/audio_cache/.gitkeep
+
+# OS
+.DS_Store
