@@ -32,6 +32,7 @@ load_dotenv()
 
 from brain import EMERGENCY_RESPONSE, generate_response, is_emergency  # noqa: E402
 from scheduler import extract_appointment  # noqa: E402
+from tracing import trace, traced_step  # noqa: E402
 from voice import synthesize_speech  # noqa: E402
 
 app = FastAPI()
@@ -78,7 +79,8 @@ def _base_url() -> str:
 
 def _save_audio(call_sid: str, text: str) -> str:
     """Synthesizes `text`, saves it, returns the public URL Twilio can fetch."""
-    audio_bytes = synthesize_speech(text)
+    with traced_step(call_sid, "tts"):
+        audio_bytes = synthesize_speech(text)
     filename = f"{call_sid}-{uuid.uuid4().hex[:8]}.mp3"
     (AUDIO_DIR / filename).write_bytes(audio_bytes)
     return f"{_base_url()}/audio/{filename}"
@@ -104,6 +106,7 @@ def _twiml_play_and_hangup(audio_url: str) -> str:
 
 @app.post("/voice")
 async def voice(CallSid: str = Form(...)):
+    trace(CallSid, "call_started")
     _conversations[CallSid] = []
     _calls[CallSid] = {"status": "active", "started_at": _now()}
     audio_url = _save_audio(CallSid, GREETING)
@@ -117,27 +120,39 @@ async def respond(CallSid: str = Form(...), SpeechResult: str = Form("")):
     history = _conversations.setdefault(CallSid, [])
     call = _calls.setdefault(CallSid, {"status": "active", "started_at": _now()})
 
+    # Length only, never the words themselves. A trace tells you THAT a
+    # caller said something and roughly how much, never WHAT.
+    trace(CallSid, "speech_received", chars=len(SpeechResult.strip()))
+
     if not SpeechResult.strip():
         call["status"] = "no_input"
+        trace(CallSid, "call_ended", reason="no_input")
         audio_url = _save_audio(CallSid, NO_INPUT)
         return PlainTextResponse(
             _twiml_play_and_hangup(audio_url), media_type="application/xml"
         )
 
-    if is_emergency(SpeechResult):
+    emergency = is_emergency(SpeechResult)
+    trace(CallSid, "emergency_check", triggered=emergency)
+    if emergency:
         call["status"] = "emergency"
+        trace(CallSid, "call_ended", reason="emergency")
         audio_url = _save_audio(CallSid, EMERGENCY_RESPONSE)
         return PlainTextResponse(
             _twiml_play_and_hangup(audio_url), media_type="application/xml"
         )
 
-    reply = generate_response(SpeechResult, history)
+    with traced_step(CallSid, "llm_response"):
+        reply = generate_response(SpeechResult, history)
     history.append({"role": "user", "content": SpeechResult})
     history.append({"role": "assistant", "content": reply})
     call["status"] = "active"
-    _refresh_appointment(CallSid)
+
+    with traced_step(CallSid, "appointment_extraction"):
+        _refresh_appointment(CallSid)
 
     audio_url = _save_audio(CallSid, reply)
+    trace(CallSid, "turn_complete", turns=len(history) // 2)
     return PlainTextResponse(
         _twiml_gather_and_play(audio_url, GOODBYE), media_type="application/xml"
     )
