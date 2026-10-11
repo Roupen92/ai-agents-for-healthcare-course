@@ -20,15 +20,18 @@ anything that looks like a real medical emergency — see brain.py.
 
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
 from brain import EMERGENCY_RESPONSE, generate_response, is_emergency  # noqa: E402
+from scheduler import extract_appointment  # noqa: E402
 from voice import synthesize_speech  # noqa: E402
 
 app = FastAPI()
@@ -48,6 +51,25 @@ GOODBYE = "Thanks for calling. Goodbye."
 # production, where this needs to live in Redis or a database so it
 # survives a restart and works across multiple server processes.
 _conversations: dict[str, list[dict]] = {}
+
+# call_sid -> {"status": "active"|"completed"|"emergency"|"no_input",
+#              "started_at": iso str}. Powers the dashboard's call list.
+_calls: dict[str, dict] = {}
+
+# call_sid -> the extracted appointment dict from scheduler.py, re-checked
+# and overwritten after every turn so it stays current as the call goes on.
+_appointments: dict[str, dict] = {}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _refresh_appointment(call_sid: str) -> None:
+    history = _conversations.get(call_sid, [])
+    result = extract_appointment(history)
+    if result:
+        _appointments[call_sid] = {**result, "call_sid": call_sid, "updated_at": _now()}
 
 
 def _base_url() -> str:
@@ -83,6 +105,7 @@ def _twiml_play_and_hangup(audio_url: str) -> str:
 @app.post("/voice")
 async def voice(CallSid: str = Form(...)):
     _conversations[CallSid] = []
+    _calls[CallSid] = {"status": "active", "started_at": _now()}
     audio_url = _save_audio(CallSid, GREETING)
     return PlainTextResponse(
         _twiml_gather_and_play(audio_url, NO_INPUT), media_type="application/xml"
@@ -92,14 +115,17 @@ async def voice(CallSid: str = Form(...)):
 @app.post("/respond")
 async def respond(CallSid: str = Form(...), SpeechResult: str = Form("")):
     history = _conversations.setdefault(CallSid, [])
+    call = _calls.setdefault(CallSid, {"status": "active", "started_at": _now()})
 
     if not SpeechResult.strip():
+        call["status"] = "no_input"
         audio_url = _save_audio(CallSid, NO_INPUT)
         return PlainTextResponse(
             _twiml_play_and_hangup(audio_url), media_type="application/xml"
         )
 
     if is_emergency(SpeechResult):
+        call["status"] = "emergency"
         audio_url = _save_audio(CallSid, EMERGENCY_RESPONSE)
         return PlainTextResponse(
             _twiml_play_and_hangup(audio_url), media_type="application/xml"
@@ -108,6 +134,8 @@ async def respond(CallSid: str = Form(...), SpeechResult: str = Form("")):
     reply = generate_response(SpeechResult, history)
     history.append({"role": "user", "content": SpeechResult})
     history.append({"role": "assistant", "content": reply})
+    call["status"] = "active"
+    _refresh_appointment(CallSid)
 
     audio_url = _save_audio(CallSid, reply)
     return PlainTextResponse(
@@ -123,3 +151,61 @@ async def audio(filename: str):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------
+# Dashboard API — read-only JSON the frontend polls. Nothing here takes
+# input from a caller directly, so it doesn't need the same scrutiny as
+# the call-handling endpoints above, but it's still PHI if a real call
+# ever touches it. See the HIPAA section of the course README.
+# ---------------------------------------------------------------------
+
+
+@app.get("/api/stats")
+async def api_stats():
+    statuses = [c["status"] for c in _calls.values()]
+    return {
+        "total_calls": len(_calls),
+        "emergency_calls": statuses.count("emergency"),
+        "active_calls": statuses.count("active"),
+        "appointments_captured": len(_appointments),
+    }
+
+
+@app.get("/api/calls")
+async def api_calls():
+    out = []
+    for call_sid, call in sorted(
+        _calls.items(), key=lambda kv: kv[1]["started_at"], reverse=True
+    ):
+        history = _conversations.get(call_sid, [])
+        last = history[-1]["content"] if history else ""
+        out.append({
+            "call_sid": call_sid,
+            "status": call["status"],
+            "started_at": call["started_at"],
+            "turns": len(history),
+            "preview": last[:80],
+        })
+    return out
+
+
+@app.get("/api/calls/{call_sid}/transcript")
+async def api_transcript(call_sid: str):
+    return {
+        "call_sid": call_sid,
+        "status": _calls.get(call_sid, {}).get("status", "unknown"),
+        "messages": _conversations.get(call_sid, []),
+    }
+
+
+@app.get("/api/appointments")
+async def api_appointments():
+    return sorted(
+        _appointments.values(), key=lambda a: a["updated_at"], reverse=True
+    )
+
+
+static_dir = Path(__file__).parent / "static"
+static_dir.mkdir(exist_ok=True)
+app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

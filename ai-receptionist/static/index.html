@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Clinic Receptionist — Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>AI Clinic Receptionist</h1>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="live">Live</button>
+      <button class="tab-btn" data-tab="scheduler">Scheduler</button>
+    </nav>
+  </header>
+
+  <main id="live" class="view active">
+    <aside class="panel dashboard">
+      <h2>Dashboard</h2>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-num" id="stat-total">0</span><span class="stat-label">Total calls</span></div>
+        <div class="stat"><span class="stat-num" id="stat-active">0</span><span class="stat-label">Active now</span></div>
+        <div class="stat stat-warn"><span class="stat-num" id="stat-emergency">0</span><span class="stat-label">Emergency escalations</span></div>
+        <div class="stat"><span class="stat-num" id="stat-appts">0</span><span class="stat-label">Appointments captured</span></div>
+      </div>
+      <h3>Recent calls</h3>
+      <ul id="call-list" class="call-list"></ul>
+    </aside>
+
+    <section class="panel transcript">
+      <h2 id="transcript-title">Transcript</h2>
+      <p class="hint" id="transcript-hint">Select a call on the left to see the conversation.</p>
+      <div id="transcript-messages" class="transcript-messages"></div>
+    </section>
+  </main>
+
+  <main id="scheduler" class="view">
+    <section class="panel scheduler-panel">
+      <h2>Scheduler</h2>
+      <p class="hint">Appointment, reschedule, cancel, and callback requests the AI picked up from calls. Nothing here is written to a real calendar yet — this is the handoff list a front-desk person would work from.</p>
+      <table class="appt-table">
+        <thead>
+          <tr><th>Intent</th><th>Name</th><th>Callback number</th><th>Requested time</th><th>Reason</th><th>Updated</th></tr>
+        </thead>
+        <tbody id="appt-rows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

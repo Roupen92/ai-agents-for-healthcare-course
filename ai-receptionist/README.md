@@ -61,6 +61,23 @@ stays in scope and refuses to give medical advice, generates real audio,
 and drives the exact same FastAPI request cycle Twilio would use — all
 without placing a call.
 
+## Dashboard
+
+A small web dashboard ships with the server at `/` (so once `uvicorn` is
+running, just open `http://localhost:8000/` in a browser):
+
+- **Live tab** — a left-hand panel with call stats and the list of recent
+  calls, and a middle panel showing the live transcript of whichever call
+  you select.
+- **Scheduler tab** — every scheduling, rescheduling, cancellation, or
+  callback request the AI picked up, pulled out of the conversation by
+  `scheduler.py` into a structured row. This is a handoff list for a real
+  front-desk person, not a connection to an actual calendar.
+
+It's served straight from this same FastAPI app, polling a few read-only
+`/api/...` endpoints every few seconds. No build step, no separate
+frontend server.
+
 ## Run it for a real phone call
 
 1. Start the server:
